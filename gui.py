@@ -2,7 +2,7 @@ import cv2
 from PyQt5 import QtGui, QtWidgets
 from PyQt5.QtGui import QPixmap
 import ui_1
-from model import Frame_thread
+from model import FrameThread
 
 class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
 
@@ -31,7 +31,7 @@ class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
         self.input_file.setReadOnly(True)
         self.camera.currentIndexChanged.connect(self.open_video_stream)
         self.view.clicked.connect(self.view_video)
-        self.analize.clicked.connect(self.analize_video)
+        self.analize.clicked.connect(self.toggle_analize)
         self.mask.clicked.connect(self.toggle_draw_mask)
         self.stop.clicked.connect(self.stopVideo)
         self.mask_value.valueChanged.connect(self.getMask)
@@ -64,26 +64,31 @@ class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
                 self.view.setEnabled(True)
 
     def view_video(self):
-        self.thread = Frame_thread(self.PATH_TO_VIDEO)
+        self.thread = FrameThread(self.PATH_TO_VIDEO)
         self.thread.changePixmap.connect(self.setImage)
         self.thread.start()
         self.setting.setEnabled(True)
         self.view.setEnabled(False)
 
-    def analize_video(self):
-        
-        self.thread.Q = self.Qv.value()
-        self.thread.S = self.ssg.value()
-        self.thread.K = self.Koef.value()
-        self.thread.Qp = (
-            (self.H1.value() / 100) * self.Nmax_1.value()
-            + (self.H2.value() / 100) * self.Nmax_2.value()
-            + (self.H3.value() / 100) * self.Nmax_3.value()
-        )
+    def toggle_analize(self):
         self.thread.do_analize = not self.thread.do_analize
-        self.thread.file_name = (
-            self.result_file.text() + "." + self.expansion.currentText()
-        )
+
+        if self.thread.do_analize:
+            self.thread.experiment.update_params(
+                Q = self.Qv.value(),
+                S = self.ssg.value(),
+                K = self.Koef.value(),
+                H1 = self.H1.value(),
+                H2 = self.H2.value(),
+                H3 = self.H3.value(),
+                Nmax_1 = self.Nmax_1.value(), 
+                Nmax_2 = self.Nmax_2.value(), 
+                Nmax_3 = self.Nmax_3.value()
+            )
+
+            self.thread.file_name = (
+                self.result_file.text() + "." + self.expansion.currentText()
+            )
 
     def toggle_draw_mask(self):
         self.thread.draw_mask = not self.thread.draw_mask

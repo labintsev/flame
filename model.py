@@ -2,26 +2,96 @@ import time
 import cv2
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal
 from PyQt5.QtGui import QImage
 
 
-class FlameModel:
+class Experiment(QObject):
+    """
+    Handles experimental parameters, data collection, angle extraction, and result serialization.
+
+    This class stores experiment parameters, accumulates measurement data (angles and voltages),
+    provides methods to update parameters, extract angles from frames, and serialize results
+    with error analysis to files.
+    """
+
     def __init__(self):
-        pass
+        """
+        Initialize the Experiment object with default parameters and empty data lists.
+        """
+        super(Experiment, self).__init__()
+        self.Q = 1e-5
+        self.S = 1e-5
+        self.K = 1
+        self.Qp = 0
+        self.Qprib = 0
+        self.betta = []
+        self.UH = []
 
-    def process_frame(self):
-        pass
+    def update_params(self, Q, S, K, H1, H2, H3, Nmax_1, Nmax_2, Nmax_3):
+        """
+        Update experiment parameters and calculate instrument error.
 
-    def serialize(file_name, betta, UH, Qprib):
+        Args:
+            Q (float): Experimental parameter Q.
+            S (float): Experimental parameter S.
+            K (float): Experimental parameter K.
+            H1 (float): Error coefficient for Nmax_1.
+            H2 (float): Error coefficient for Nmax_2.
+            H3 (float): Error coefficient for Nmax_3.
+            Nmax_1 (float): Maximum value for first measurement.
+            Nmax_2 (float): Maximum value for second measurement.
+            Nmax_3 (float): Maximum value for third measurement.
+        """
+        self.Q = Q
+        self.S = S
+        self.K = K
+        self.Qp = (H1 / 100) * Nmax_1 + (H2 / 100) * Nmax_2 + (H3 / 100) * Nmax_3
+
+    def extract_angle(self, frame, mask_treshold, channel=2):
+        """
+        Analyze a single frame to extract feature points and calculate the angle.
+
+        Args:
+            frame (np.ndarray): The input video frame (RGB).
+            mask_treshold (int): Threshold value for mask.
+            channel (int): Color channel to use for mask (default: 2, red).
+
+        Returns:
+            tuple: (p1, p2, phi)
+                p1 (tuple): First feature point (x, y).
+                p2 (tuple): Second feature point (x, y).
+                phi (float): Calculated angle in degrees.
+
+        Side Effects:
+            Appends valid angle and voltage measurements to self.betta and self.UH.
+        """
+        img_plane = frame[:, :, channel]
+        img_mask = (img_plane > mask_treshold).astype(np.uint8)
+        x = np.argmax(np.sum(img_mask, axis=0))
+        y = np.argmax(np.sum(img_mask, axis=1))
+        h, w = img_mask.shape
+        p1 = x, np.argmax(img_mask[:, x])
+        p2 = w - np.argmax(img_mask[y, ::-1]), y
+        dy = p2[1] - p1[1]
+        dx = p2[0] - p1[0]
+        phi = 90 - np.arctan(dx / dy) * (180 / np.pi)
+        if 90 > phi > 60:
+            self.betta.append(phi)
+            self.UH.append(
+                np.cos(phi * np.pi / 180)
+                * ((self.Q * 16.667) / (self.S + 1e-5))
+                * self.K
+            )
+        return p1, p2, phi
+
+    def serialize(self, file_name):
         """
         Saves measurement data and calculates error statistics for an experiment.
 
-        Parameters:
-            name_file (str): The base filename for saving results, extension is '.txt', saves as CSV
-            betta (list or array-like): List of angle values (phi) for each measurement.
-            UH (list or array-like): List of measured voltage values (Uн) corresponding to each angle.
-            Qprib (float): Instrument error to be included in the total error calculation.
+        Args:
+            file_name (str): The base filename for saving results. If the extension is '.txt', saves as CSV;
+                             if '.xlsx', saves as Excel; otherwise, prints an error.
 
         Functionality:
             - Saves the measurement data (phi, Uн) to a file (CSV or Excel).
@@ -34,77 +104,84 @@ class FlameModel:
             - Data file with measurement results.
             - Text report file with error analysis and statistics.
         """
-        result = {"phi": betta, "Uн": UH}
+        if len(self.betta) == 0:
+            print("No mesurements result")
+            return
+
         if file_name[-3:] == "txt":
-            file = open(file_name, "w")
-            file.write("phi,Uн\n")
-            for i in range(len(betta)):
-                file.write(f"{betta[i]},{UH[i]}\n")
-            file.close()
+            with open(file_name, "w", encoding="utf-8") as file:
+                file.write("phi,Uн \n")
+                for i in range(len(self.betta)):
+                    file.write(f"{self.betta[i]}, {self.UH[i]}\n")
+
         elif file_name[-4:] == "xlsx":
+            result = {"phi": self.betta, "Uн": self.UH}
             df = pd.DataFrame(result)
             df.to_excel(file_name)
-        else:
-            print('Unknown file format')
 
-        X = sum(UH) / len(UH)
-        Qapi = UH
+        else:
+            print("Unknown file format")
+
+        # todo refactor computations to other method
+        X_mean = np.mean(self.UH)
+        Qapi = self.UH
         for i in range(len(Qapi)):
-            Qapi[i] = abs(Qapi[i] - X)
-        Qapi = sum(Qapi) / len(UH)
-        Qotn = Qapi / X * 100
-        Q = Qapi + Qprib
-        Atop = X + Q
-        Abot = X - Q
-        with open(file_name[:-4] + "_отчет.txt", "w") as file:
+            Qapi[i] = abs(Qapi[i] - X_mean)
+        Qapi = sum(Qapi) / len(self.UH)
+        Qotn = Qapi / X_mean * 100
+        Q = Qapi + self.Qprib
+        Atop = X_mean + Q
+        Abot = X_mean - Q
+
+        with open(file_name[:-4] + "_отчет.txt", "w", encoding="utf-8") as file:
             file.write(
-                f"Всего снято показаний: {len(UH)}\n"
-                f"Среднее арифметическое значение Х = {X}\n"
-                f"Среднее абслолютное погрешности измерений Qабс = {Qapi}\n"
-                f"Среднее относительное погрешности измерений Qотн = {Qotn} %\n"
-                f"Оценка полной погрешности эксперимента Qполн = {Q}\n"
-                f"Доверительный интервал: Аверх = {Atop}    Анижн = {Abot}\n"
+                f"""
+Всего снято показаний: {len(self.UH)} 
+Среднее арифметическое значение Х = {X_mean} 
+Среднее абслолютное погрешности измерений Q_abc = {Qapi} 
+Среднее относительное погрешности измерений Q_rel = {Qotn} 
+Оценка полной погрешности эксперимента Q_total = {Q}
+Доверительный интервал: Аверх = {Atop}    Анижн = {Abot}
+"""
             )
 
 
-
-class Frame_thread(QThread):
+class FrameThread(QThread):
     """
-    QThread subclass for processing video frames in real-time.
+    QThread subclass for real-time video frame processing and analysis.
 
-    This class handles video capture from a file or camera, applies optional masking,
+    This class captures video frames from a file or camera, applies optional masking,
     analyzes frames to extract angles and voltages, and emits processed frames to the GUI.
-    It also collects measurement data and triggers saving of results and error analysis.
+    It accumulates measurement data and saves results and error analysis after processing.
 
     Attributes:
-        changePixmap (pyqtSignal): Class attribute. Signal emitted with the processed QImage for display.
-        nameFile (str): Output filename for saving results.
+        changePixmap (pyqtSignal): Signal emitted with the processed QImage for display.
+        file_name (str): Output filename for saving results.
         source (str or int): Video file path or camera index.
         running (bool): Controls the main processing loop.
-        mask (bool): Enables or disables mask processing.
-        ValueMask (int): Threshold value for mask.
-        analize (bool): Enables or disables analysis mode.
-        Q (float): Experimental parameter for voltage calculation.
-        S (float): Experimental parameter for voltage calculation.
-        K (float): Experimental parameter for voltage calculation.
-        Qp (float): Instrument error for error analysis.
+        do_analize (bool): Enables or disables analysis mode.
+        draw_mask (bool): Enables or disables mask drawing.
+        mask_treshold (int): Threshold value for mask.
+        experiment (Experiment): Experiment object for parameter management and data collection.
         width_0 (int): Frame width.
         height_0 (int): Frame height.
         delta_x (int): Horizontal offset for region of interest.
         delta_y (int): Vertical offset for region of interest.
         x_start, x_end, y_start, y_end (int): Coordinates for region of interest.
+        delay (float): Delay between frame processing iterations (in seconds).
     """
-    changePixmap = pyqtSignal(QImage) 
+
+    changePixmap = pyqtSignal(QImage)
 
     def __init__(self, source):
         """
-        Initialize the Frame_thread.
+        Initialize the FrameThread.
 
         Args:
-            source (str or int): Path to video file or camera index. 
+            source (str or int): Path to video file or camera index.
         """
         super().__init__()
-        
+
         self.file_name = None
         self.source = source
 
@@ -112,10 +189,7 @@ class Frame_thread(QThread):
         self.do_analize = False
         self.draw_mask = False
         self.mask_treshold = 140
-        self.Q = 1e-5
-        self.S = 1e-5
-        self.K = 1
-        self.Qp = 0
+        self.experiment = Experiment()
 
         self.width_0 = 0
         self.height_0 = 0
@@ -126,7 +200,6 @@ class Frame_thread(QThread):
         self.x_start, self.x_end = 0, 0
         self.y_start, self.y_end = 0, 0
 
-        # Todo adjust delay in UI
         self.delay = 0.3
 
     def run(self):
@@ -135,20 +208,17 @@ class Frame_thread(QThread):
 
         - Captures frames from the video source.
         - Applies region of interest and optional masking.
-        - If analysis is enabled, extracts angle and voltage data.
-        - Emits processed frames to the GUI.
-        - Saves measurement data and error analysis after processing.
+        - If analysis is enabled, extracts angle and voltage data using the Experiment object.
+        - Emits processed frames to the GUI via the changePixmap signal.
+        - Saves measurement data and error analysis after processing is complete.
         """
         cap = cv2.VideoCapture(self.source)
         self.running = True
         ret, frame = cap.read()
-        betta = []
-        UH = []
         self.width_0 = frame.shape[1]
         self.height_0 = frame.shape[0]
         self.x_end = self.width_0
         self.y_end = self.height_0
-
 
         while self.running:
             ret, frame = cap.read()
@@ -172,48 +242,14 @@ class Frame_thread(QThread):
                 frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
 
             if self.do_analize:
-                p1, p2, phi = self.extract_angle(frame)
+                p1, p2, _ = self.experiment.extract_angle(frame, self.mask_treshold)
                 cv2.line(frame, p1, p2, (255, 0, 0), 5)
-                if 90 > phi > 60:
-                    betta.append(phi)
-                    UH.append(
-                        np.cos(phi * np.pi / 180)
-                        * ((self.Q * 16.667) / (self.S + 1e-5))
-                        * self.K
-                    )
+
             image = QImage(frame.data, self.width_0, self.height_0, bytes_per_line, 13)
             image = image.scaled(640, 480, Qt.KeepAspectRatio)
             self.changePixmap.emit(image)
 
-        if len(betta):
-            FlameModel.serialize(self.file_name, betta, UH, self.Qp)
-
-    def extract_angle(self, frame, channel=2):
-        """
-        Analyze a single frame to extract feature points and calculate the angle.
-
-        Args:
-            frame (np.ndarray): The input video frame (RGB).
-            channel (int): Color channel to use for mask (default: 2, red).
-
-        Returns:
-            tuple: (p1, p2, phi)
-                p1 (tuple): First feature point (x, y).
-                p2 (tuple): Second feature point (x, y).
-                phi (float): Calculated angle in degrees.
-        """
-        img_plane = frame[:, :, channel]
-        img_mask = (img_plane > self.mask_treshold).astype(np.uint8)
-        x = np.argmax(np.sum(img_mask, axis=0))
-        y = np.argmax(np.sum(img_mask, axis=1))
-        h, w = img_mask.shape
-        p1 = x, np.argmax(img_mask[:, x])
-        p2 = w - np.argmax(img_mask[y, ::-1]), y
-        # print(f'p1={p1}, p2={p2}')
-        dy = p2[1] - p1[1]
-        dx = p2[0] - p1[0]
-        phi = 90 - np.arctan(dx / dy) * (180 / np.pi)
-        return p1, p2, phi
+        self.experiment.serialize(self.file_name)
 
     def stop(self):
         """
