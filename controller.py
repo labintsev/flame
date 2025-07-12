@@ -66,7 +66,6 @@ class Widget(QtWidgets.QMainWindow, view.Ui_MainWindow):
                 self.view.setEnabled(True)
 
     def play_video(self):
-        print(f"Play video: {self.PATH_TO_VIDEO}")
         self.thread = FrameThread(
             video_source=self.PATH_TO_VIDEO,
             out_file_name=self.result_file.text(),

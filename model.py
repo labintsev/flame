@@ -114,7 +114,6 @@ class Experiment(QObject):
         outputs = self.session.run(None, {"input": frame})
         # Get the predicted label
         label = np.argmax(outputs[0], axis=1)[0]
-        print(f"Predicted label: {label}")
         self.labels.append(label)
 
     def serialize(self):
