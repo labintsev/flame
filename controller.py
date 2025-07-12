@@ -32,7 +32,7 @@ class Widget(QtWidgets.QMainWindow, view.Ui_MainWindow):
 
         self.input_file.setReadOnly(True)
         self.camera.currentIndexChanged.connect(self.open_video_stream)
-        self.view.clicked.connect(self.view_video)
+        self.view.clicked.connect(self.play_video)
         self.analize.clicked.connect(self.toggle_analize)
         self.mask.clicked.connect(self.toggle_draw_mask)
         self.stop.clicked.connect(self.stopVideo)
@@ -65,19 +65,24 @@ class Widget(QtWidgets.QMainWindow, view.Ui_MainWindow):
                 self.input_file.setText("Камера активна")
                 self.view.setEnabled(True)
 
-    def view_video(self):
-        self.thread = FrameThread(self.PATH_TO_VIDEO, self.result_file.text())
+    def play_video(self):
+        print(f"Play video: {self.PATH_TO_VIDEO}")
+        self.thread = FrameThread(
+            video_source=self.PATH_TO_VIDEO,
+            out_file_name=self.result_file.text(),
+            do_analize=self.do_analize,
+            draw_mask=self.draw_mask,
+            mask_treshold=self.mask_value.value(),
+            orientation=self.expansion.currentIndex()
+            )
         self.thread.changePixmap.connect(self.setImage)
-        self.set_mask_threshold()
-        self.set_orientation()
-        self.thread.draw_mask = self.draw_mask
-        self.thread.do_analize = self.do_analize
         self.thread.start()
         self.setting.setEnabled(True)
         self.view.setEnabled(False)
 
     def set_orientation(self):
-        self.thread.orientation = self.expansion.currentIndex()
+        if None is not self.thread:
+            self.thread.orientation = self.expansion.currentIndex()
 
     def toggle_analize(self):
         """

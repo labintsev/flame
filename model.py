@@ -3,9 +3,19 @@ import time
 import cv2
 import numpy as np
 import pandas as pd
+import onnxruntime as ort
 from PyQt5.QtCore import Qt, QThread, QObject, pyqtSignal
 from PyQt5.QtGui import QImage
+import logging
 
+# Setup logger
+logger = logging.getLogger("flame_logger")
+logger.setLevel(logging.INFO)
+os.makedirs("output", exist_ok=True)
+file_handler = logging.FileHandler(os.path.join("output", "log.txt"), encoding="utf-8")
+formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
 class Experiment(QObject):
     """
@@ -16,11 +26,13 @@ class Experiment(QObject):
     with error analysis to files.
     """
 
-    def __init__(self):
+    def __init__(self, out_file_name=None, source_name=None):
         """
         Initialize the Experiment object with default parameters and empty data lists.
         """
         super(Experiment, self).__init__()
+        self.file_name = out_file_name
+        self.source_name = source_name
         self.Q = 1e-5
         self.S = 1e-5
         self.K = 1
@@ -28,6 +40,11 @@ class Experiment(QObject):
         self.Qprib = 0
         self.betta = []
         self.UH = []
+        self.labels = []
+
+        # Create an inference session
+        self.session = ort.InferenceSession("convnet_0.onnx")
+        logger.info("Experiment initialized with file_name=%s, source_name=%s", out_file_name, source_name)
 
     def update_params(self, Q, S, K, H1, H2, H3, Nmax_1, Nmax_2, Nmax_3):
         """
@@ -86,7 +103,21 @@ class Experiment(QObject):
             )
         return p1, p2, phi
 
-    def serialize(self, file_name):
+    def predict_label(self, frame):
+        # Preprocess the input frame
+        frame = cv2.resize(frame, (1024, 1024))
+        frame = frame.transpose(2, 0, 1)  # Change data layout to (C, H, W)
+        frame = np.expand_dims(frame, axis=0)  # Add batch dimension
+        # Normalize to [-1, 1]
+        frame = (frame.astype(np.float32) / 255.0 - 0.5) * 2.0
+        # Run inference
+        outputs = self.session.run(None, {"input": frame})
+        # Get the predicted label
+        label = np.argmax(outputs[0], axis=1)[0]
+        print(f"Predicted label: {label}")
+        self.labels.append(label)
+
+    def serialize(self):
         """
         Saves measurement data and calculates error statistics for an experiment.
 
@@ -106,15 +137,19 @@ class Experiment(QObject):
             - Text report file with error analysis and statistics.
         """
         if len(self.betta) == 0:
-            print("No mesurements result")
+            logger.warning("No measurements result")
             return
-        os.makedirs('output', exist_ok=True)
 
-        result = {"phi": self.betta, "Uн": self.UH}
-        df = pd.DataFrame(result)
-        df.to_csv(os.path.join('output', file_name), index=False)
-
-        # todo refactor computations to other method
+        if len(self.UH) == len(self.betta) == len(self.labels):
+            result = {"phi": self.betta, "Uн": self.UH, "label": self.labels}
+            df = pd.DataFrame(result)
+            df.to_csv(os.path.join("output", self.file_name), index=False)
+            logger.info("Saved results to %s", os.path.join("output", self.file_name))
+        else:
+            logger.error("Unequal lengths of measurements, cannot save results. Lengths: betta=%d, UH=%d, labels=%d",
+                         len(self.betta), len(self.UH), len(self.labels))
+            return
+        # todo refactor computations to other method and numpy
         X_mean = np.mean(self.UH)
         Qapi = self.UH
         for i in range(len(Qapi)):
@@ -125,11 +160,12 @@ class Experiment(QObject):
         Atop = X_mean + Q
         Abot = X_mean - Q
 
-        reportname = file_name[:-4] + "_report.txt"
+        reportname = self.file_name[:-4] + "_report.txt"
 
-        with open(os.path.join('output', reportname), "w", encoding="utf-8") as file:
+        with open(os.path.join("output", reportname), "w", encoding="utf-8") as file:
             file.write(
                 f"""
+Источник данных: {self.source_name}
 Всего снято показаний: {len(self.UH)} 
 Среднее арифметическое значение Х = {X_mean} 
 Среднее абслолютное погрешности измерений Q_abc = {Qapi} 
@@ -138,7 +174,7 @@ class Experiment(QObject):
 Доверительный интервал: Аверх = {Atop}    Анижн = {Abot}
 """
             )
-
+        logger.info("Report saved to %s", os.path.join("output", reportname))
 
 class FrameThread(QThread):
     """
@@ -167,7 +203,15 @@ class FrameThread(QThread):
 
     changePixmap = pyqtSignal(QImage)
 
-    def __init__(self, source, file_name):
+    def __init__(
+        self,
+        video_source,
+        out_file_name,
+        do_analize=False,
+        draw_mask=False,
+        mask_treshold=140,
+        orientation=0,
+    ):
         """
         Initialize the FrameThread.
 
@@ -176,25 +220,26 @@ class FrameThread(QThread):
         """
         super().__init__()
 
-        self.file_name = file_name
-        self.source = source
+        self.out_file_name = out_file_name
+        self.video_source = video_source
+        self.do_analize = do_analize
+        self.draw_mask = draw_mask
+        self.mask_treshold = mask_treshold
+        self.orientation = (
+            orientation  # 0 - no rotation, 1 - +90 degrees, 2 - -90 degrees
+        )
 
+        self.experiment = Experiment(out_file_name, source_name=video_source)
         self.running = True
-        self.do_analize = False
-        self.draw_mask = False
-        self.mask_treshold = 140
-        self.experiment = Experiment()
-
         self.width_0 = 0
         self.height_0 = 0
-
         self.delta_x = 0
         self.delta_y = 0
-
         self.x_start, self.x_end = 0, 0
         self.y_start, self.y_end = 0, 0
-        self.orientation = 0  # 0 - no rotation, 1 - +90 degrees, 2 - -90 degrees
         self.delay = 0.3
+
+        logger.info("FrameThread initialized for source=%s, output=%s", video_source, out_file_name)
 
     def set_frame_size(self, frame):
         self.width_0 = frame.shape[1]
@@ -212,7 +257,7 @@ class FrameThread(QThread):
         - Emits processed frames to the GUI via the changePixmap signal.
         - Saves measurement data and error analysis after processing is complete.
         """
-        cap = cv2.VideoCapture(self.source)
+        cap = cv2.VideoCapture(self.video_source)
         self.running = True
 
         while self.running:
@@ -220,6 +265,7 @@ class FrameThread(QThread):
             time.sleep(self.delay)
             if not ret:
                 cap.release()
+                logger.info("Video source ended or cannot read frame.")
                 break
 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -227,30 +273,35 @@ class FrameThread(QThread):
                 frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
             elif self.orientation == 2:  # -90 degrees
                 frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            
+
+            logger.debug(f"Processing frame: {frame.shape}")
             self.set_frame_size(frame)
             ch = frame.shape[2]
             bytes_per_line = ch * self.width_0
-            frame = frame[
+            frame_crop = frame[
                 self.y_start + self.delta_y : self.y_end + self.delta_y,
                 self.x_start + self.delta_x : self.x_end + self.delta_x,
             ]
-            frame = cv2.resize(frame, (self.width_0, self.height_0))
+            frame_crop = cv2.resize(frame_crop, (self.width_0, self.height_0))
 
             if self.draw_mask:
-                frame = frame[:, :, 2]
-                frame = (frame > self.mask_treshold).astype(np.uint8) * 255
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                # color white mask
+                frame_crop = frame_crop[:, :, 2]
+                frame_crop = (frame_crop > self.mask_treshold).astype(np.uint8) * 255
+                frame_crop = cv2.cvtColor(frame_crop, cv2.COLOR_GRAY2RGB)
 
             if self.do_analize:
-                p1, p2, _ = self.experiment.extract_angle(frame, self.mask_treshold)
-                cv2.line(frame, p1, p2, (255, 0, 0), 5)
+                p1, p2, phi = self.experiment.extract_angle(frame_crop, self.mask_treshold)
+                if 60 < phi < 90:
+                    self.experiment.predict_label(frame)
+                cv2.line(frame_crop, p1, p2, (255, 0, 0), 5)
 
-            image = QImage(frame.data, self.width_0, self.height_0, bytes_per_line, 13)
+            image = QImage(frame_crop.data, self.width_0, self.height_0, bytes_per_line, 13)
             image = image.scaled(640, 480, Qt.KeepAspectRatio)
             self.changePixmap.emit(image)
 
-        self.experiment.serialize(self.file_name)
+        self.experiment.serialize()
+        logger.info("FrameThread finished processing and serialized results.")
 
     def stop(self):
         """
