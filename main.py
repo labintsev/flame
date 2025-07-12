@@ -1,8 +1,8 @@
 import sys
-import gui
+import controller
 
 if __name__ == '__main__':
-    app = gui.QtWidgets.QApplication(sys.argv)
-    mw = gui.Widget()
+    app = controller.QtWidgets.QApplication(sys.argv)
+    mw = controller.Widget()
     mw.show()
     app.exec()

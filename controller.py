@@ -1,10 +1,10 @@
 import cv2
 from PyQt5 import QtGui, QtWidgets
 from PyQt5.QtGui import QPixmap
-import ui_1
+import view
 from model import FrameThread
 
-class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
+class Widget(QtWidgets.QMainWindow, view.Ui_MainWindow):
 
     def __init__(self):
         super().__init__()
@@ -12,7 +12,7 @@ class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
         self.thread = None
         self.PATH_TO_VIDEO = None
 
-        self.setWindowTitle("FireController")
+        self.setWindowTitle("Fire Analyzer")
         self.setWindowIcon(QtGui.QIcon("img/icon.png"))
         self.setFixedSize(1000, 750)
         self.x_right.setIcon(QtGui.QIcon("img/rigth.png"))
@@ -25,8 +25,10 @@ class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
         self.view.setEnabled(False)
         self.setting.setEnabled(False)
         self.mask_value.setValue(140)
-        self.result_file.setText("out")
+        self.result_file.setText("out.csv")
         self.label_4.setText("Чувствительность маски равна 140")
+        self.do_analize = False
+        self.draw_mask = False
 
         self.input_file.setReadOnly(True)
         self.camera.currentIndexChanged.connect(self.open_video_stream)
@@ -34,19 +36,19 @@ class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
         self.analize.clicked.connect(self.toggle_analize)
         self.mask.clicked.connect(self.toggle_draw_mask)
         self.stop.clicked.connect(self.stopVideo)
-        self.mask_value.valueChanged.connect(self.getMask)
+        self.mask_value.valueChanged.connect(self.set_mask_threshold)
         self.x_left.clicked.connect(self.x_decrement)
         self.x_right.clicked.connect(self.x_increment)
         self.y_up.clicked.connect(self.y_increment)
         self.y_down.clicked.connect(self.y_decrement)
         self.size_plus.clicked.connect(self.size_increment)
         self.size_min.clicked.connect(self.size_decrement)
+        self.expansion.currentIndexChanged.connect(self.set_orientation)
 
     def open_video_stream(self):
         if not self.camera.currentIndex():
             file = QtWidgets.QFileDialog.getOpenFileName(
                 caption="Выбор файла",
-                directory="c:\\",
                 filter="All (*);;Exes (*.mov);;Exes (*.avi)",
             )
             if file[0]:
@@ -64,14 +66,26 @@ class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
                 self.view.setEnabled(True)
 
     def view_video(self):
-        self.thread = FrameThread(self.PATH_TO_VIDEO)
+        self.thread = FrameThread(self.PATH_TO_VIDEO, self.result_file.text())
         self.thread.changePixmap.connect(self.setImage)
+        self.set_mask_threshold()
+        self.set_orientation()
+        self.thread.draw_mask = self.draw_mask
+        self.thread.do_analize = self.do_analize
         self.thread.start()
         self.setting.setEnabled(True)
         self.view.setEnabled(False)
 
+    def set_orientation(self):
+        self.thread.orientation = self.expansion.currentIndex()
+
     def toggle_analize(self):
-        self.thread.do_analize = not self.thread.do_analize
+        """
+        Toggle the analysis mode and update experiment parameters.
+        Paint the 'analize' button green when analysis is active, restore default when inactive.
+        """
+        self.do_analize = not self.do_analize
+        self.thread.do_analize = self.do_analize
 
         if self.thread.do_analize:
             self.thread.experiment.update_params(
@@ -85,13 +99,21 @@ class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
                 Nmax_2 = self.Nmax_2.value(), 
                 Nmax_3 = self.Nmax_3.value()
             )
-
             self.thread.file_name = (
-                self.result_file.text() + "." + self.expansion.currentText()
+                self.result_file.text() + ".csv" 
             )
+            self.analize.setStyleSheet("background-color: #4CAF50; color: white;")
+        else:
+            self.analize.setStyleSheet("font-family: 'Times New Roman';")
 
     def toggle_draw_mask(self):
-        self.thread.draw_mask = not self.thread.draw_mask
+        self.draw_mask = not self.draw_mask
+        self.thread.draw_mask = self.draw_mask
+
+        if self.thread.draw_mask:
+            self.mask.setStyleSheet("background-color: #4CAF50; color: white;")
+        else:
+            self.mask.setStyleSheet("font-family: 'Times New Roman';")
 
     def stopVideo(self):
         self.thread.running = False
@@ -101,7 +123,7 @@ class Widget(QtWidgets.QMainWindow, ui_1.Ui_MainWindow):
     def setImage(self, image):
         self.video.setPixmap(QPixmap.fromImage(image))
 
-    def getMask(self):
+    def set_mask_threshold(self):
         self.thread.mask_treshold = self.mask_value.value()
         text = "Чувствительность маски равна " + str(self.mask_value.value())
         self.label_4.setText(text)

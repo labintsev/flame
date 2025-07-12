@@ -1,3 +1,4 @@
+import os
 import time
 import cv2
 import numpy as np
@@ -107,20 +108,11 @@ class Experiment(QObject):
         if len(self.betta) == 0:
             print("No mesurements result")
             return
+        os.makedirs('output', exist_ok=True)
 
-        if file_name[-3:] == "txt":
-            with open(file_name, "w", encoding="utf-8") as file:
-                file.write("phi,Uн \n")
-                for i in range(len(self.betta)):
-                    file.write(f"{self.betta[i]}, {self.UH[i]}\n")
-
-        elif file_name[-4:] == "xlsx":
-            result = {"phi": self.betta, "Uн": self.UH}
-            df = pd.DataFrame(result)
-            df.to_excel(file_name)
-
-        else:
-            print("Unknown file format")
+        result = {"phi": self.betta, "Uн": self.UH}
+        df = pd.DataFrame(result)
+        df.to_csv(os.path.join('output', file_name), index=False)
 
         # todo refactor computations to other method
         X_mean = np.mean(self.UH)
@@ -133,7 +125,9 @@ class Experiment(QObject):
         Atop = X_mean + Q
         Abot = X_mean - Q
 
-        with open(file_name[:-4] + "_отчет.txt", "w", encoding="utf-8") as file:
+        reportname = file_name[:-4] + "_report.txt"
+
+        with open(os.path.join('output', reportname), "w", encoding="utf-8") as file:
             file.write(
                 f"""
 Всего снято показаний: {len(self.UH)} 
@@ -173,7 +167,7 @@ class FrameThread(QThread):
 
     changePixmap = pyqtSignal(QImage)
 
-    def __init__(self, source):
+    def __init__(self, source, file_name):
         """
         Initialize the FrameThread.
 
@@ -182,7 +176,7 @@ class FrameThread(QThread):
         """
         super().__init__()
 
-        self.file_name = None
+        self.file_name = file_name
         self.source = source
 
         self.running = True
@@ -199,8 +193,14 @@ class FrameThread(QThread):
 
         self.x_start, self.x_end = 0, 0
         self.y_start, self.y_end = 0, 0
-
+        self.orientation = 0  # 0 - no rotation, 1 - +90 degrees, 2 - -90 degrees
         self.delay = 0.3
+
+    def set_frame_size(self, frame):
+        self.width_0 = frame.shape[1]
+        self.height_0 = frame.shape[0]
+        self.x_end = self.width_0
+        self.y_end = self.height_0
 
     def run(self):
         """
@@ -214,11 +214,6 @@ class FrameThread(QThread):
         """
         cap = cv2.VideoCapture(self.source)
         self.running = True
-        ret, frame = cap.read()
-        self.width_0 = frame.shape[1]
-        self.height_0 = frame.shape[0]
-        self.x_end = self.width_0
-        self.y_end = self.height_0
 
         while self.running:
             ret, frame = cap.read()
@@ -228,6 +223,12 @@ class FrameThread(QThread):
                 break
 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if self.orientation == 1:  # +90 degrees
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            elif self.orientation == 2:  # -90 degrees
+                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            
+            self.set_frame_size(frame)
             ch = frame.shape[2]
             bytes_per_line = ch * self.width_0
             frame = frame[

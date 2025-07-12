@@ -1,6 +1,6 @@
-# Flame - FireController
+# Flame Analyzer
 
-Flame (FireController) is a PyQt5-based application for analyzing video or camera streams to measure and process experimental data, such as angles and voltages, with error analysis and reporting.
+Flame Analyzer is a PyQt5-based application for analyzing video or camera streams to measure and process experimental data, such as angles and termo voltages, with error analysis and reporting.
 
 ## Features
 
@@ -42,10 +42,8 @@ ui_1.py - PyQt5 UI definition (generated from Qt Designer).
 readme.md - Project documentation.
 
 ## Output
-Measurement data saved as .csv or .xlsx.
+Measurement data saved as .csv 
 Error analysis and statistics saved as a .txt report.
-License
-MIT License
 
-Author: Andrej
-Project: Flame (FireController)
+License: MIT License
+Authors: Andrej, Max, Pasha 
