@@ -1,5 +1,7 @@
 # Flame Analyzer
 
+[Документация на русском языке](readme.ru.md)
+
 Flame Analyzer is a PyQt5-based application for analyzing video or camera streams to measure and process experimental data, such as angles and termo voltages, with error analysis and reporting.
 
 ## Features
@@ -23,6 +25,11 @@ Install dependencies:
 
 ```sh
 pip install -r requirements.txt
+```
+
+Serialize conda env:
+```
+conda pack -n .conda -o env.tar.gz
 ```
 
 ## Usage
